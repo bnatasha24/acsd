@@ -5,20 +5,31 @@ import matplotlib.pyplot as plt
 import sklearn
 import category_encoders as cat_encoder
 from sklearn.metrics import confusion_matrix
+from sklearn import metrics
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import uniform, truncnorm, randint
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
+from pprint import pprint
+import xgboost as xgb
+from sklearn.utils import resample
+
 
 
 
 def XGB():
     
   # # XGBoost
-  import xgboost as xgb
+  
   from sklearn.metrics import precision_recall_fscore_support as score
   from sklearn.metrics import accuracy_score
   from sklearn.metrics import classification_report
-  xgb_model = xgb.XGBClassifier(objective="binary:logistic", reg_lambda=0.1, reg_alpha=1e-05, max_depth=9, learning_rate=1, gamma=0.2, colsample_bytree=0.3)
-  xgb_model.fit(X_train_scaled.to_numpy(), y_train.to_numpy())
+  xgb_model = xgb.XGBClassifier(objective="binary:logistic", reg_lambda=1, reg_alpha=1e-05, max_depth=12, learning_rate=0.001, gamma=0.1, colsample_bytree=0.9, eta=0.1, subsample=0.5, enable_categorical=False, min_child_weight=1, n_estimators=100, scale_pos_weight=75)
+  xgb_model.fit(x_train_scaled.to_numpy(), y_train_scaled.to_numpy())
 
-  y_pred = xgb_model.predict(X_test_scaled)
+  y_pred = xgb_model.predict(X_test)
 
   result = confusion_matrix(y_test, y_pred)
   print("Confusion Matrix:")
@@ -33,20 +44,14 @@ def XGB():
   # # Print result
   print(f'The recall value for the baseline xgboost model is {recall[1]:.4f}')
   print('XGBoost model accuracy score: {0:0.4f}'. format(accuracy_score(y_test, y_pred)))
-  ROC(xgb_model, 'XGB')
+  ROC(xgb_model, 'XGB on test dataset')
 
+def randomSearch():
 
-def randomSearch(model):
-    
-  # # randomized search
-  from sklearn.model_selection import StratifiedKFold, cross_val_score, GridSearchCV, RandomizedSearchCV
-  # # Define the search space
+  xgb_model = xgb.XGBClassifier()
+
   param_grid = { 
-    # 'n_estimators': [25, 50, 100, 150],
-    # 'max_features': ['sqrt', 'log2', None],
-    # 'max_depth': [3, 6, 9],
-    # 'max_leaf_nodes': [3, 6, 9],
-      # Learning rate shrinks the weights to make the boosting process more conservative
+    # Learning rate shrinks the weights to make the boosting process more conservative
       "learning_rate": [0.0001,0.001, 0.01, 0.1, 1] ,
       # Maximum depth of the tree, increasing it increases the model complexity.
       "max_depth": range(3,21,3),
@@ -57,7 +62,55 @@ def randomSearch(model):
       # reg_alpha provides l1 regularization to the weight, higher values result in more conservative models
       "reg_alpha": [1e-5, 1e-2, 0.1, 1, 10, 100],
       # reg_lambda provides l2 regularization to the weight, higher values result in more conservative models
-      "reg_lambda": [1e-5, 1e-2, 0.1, 1, 10, 100]}
+      "reg_lambda": [1e-5, 1e-2, 0.1, 1, 10, 100],
+      'min_child_weight': [0, 1, 100, 1000, 10000],
+      'subsample': [0, 0.25, 0.5, 0.75, 1],
+      'scale_pos_weight': [1, 10, 25, 50, 75, 99, 100, 1000]
+
+
+
+    # 'n_estimators': randint(4,200),
+    # 'max_features': truncnorm(a=0, b=1, loc=0.25, scale=0.1),
+    # 'min_samples_split': uniform(0.01, 0.199),
+    # #'max_depth': randint(1, 20)
+  }
+    
+  
+  xgboost = RandomizedSearchCV(xgb_model, param_grid, n_iter=100, cv=5, random_state=1)
+  model = xgboost.fit(X_train_scaled, y_train)
+  predictions = model.predict(X_test_scaled)
+
+  pprint(model.best_estimator_.get_params())
+  result = accuracy_score(y_test, predictions)
+  print("Accuracy:",result)
+  
+
+
+
+
+def randomSearchCross(model):
+    
+  # # randomized search
+  from sklearn.model_selection import StratifiedKFold, cross_val_score, GridSearchCV, RandomizedSearchCV
+  # # Define the search space
+  param_grid = { 
+    'n_estimators': [25, 50, 100, 150],
+    'max_features': ['sqrt', 'log2', None],
+    'max_depth': [3, 6, 9],
+    'max_leaf_nodes': [3, 6, 9]
+    }
+      # Learning rate shrinks the weights to make the boosting process more conservative
+      # "learning_rate": [0.0001,0.001, 0.01, 0.1, 1] ,
+      # # Maximum depth of the tree, increasing it increases the model complexity.
+      # "max_depth": range(3,21,3),
+      # # Gamma specifies the minimum loss reduction required to make a split.
+      # "gamma": [i/10.0 for i in range(0,5)],
+      # # Percentage of columns to be randomly samples for each tree.
+      # "colsample_bytree": [i/10.0 for i in range(3,10)],
+      # # reg_alpha provides l1 regularization to the weight, higher values result in more conservative models
+      # "reg_alpha": [1e-5, 1e-2, 0.1, 1, 10, 100],
+      # # reg_lambda provides l2 regularization to the weight, higher values result in more conservative models
+      # "reg_lambda": [1e-5, 1e-2, 0.1, 1, 10, 100]}
   # # Set up score
   scoring = ['recall']
   # Set up the k-fold cross-validation
@@ -73,7 +126,7 @@ def randomSearch(model):
                             cv=kfold, 
                             verbose=0)
   # Fit grid search
-  random_result = random_search.fit(X_scaled, y)
+  random_result = random_search.fit(X_train_scaled, y)
   # Print grid search summary
   print(random_result)
 
@@ -81,6 +134,25 @@ def randomSearch(model):
   print(f'The best score is {random_result.best_score_:.4f}')
   print('The best score standard deviation is', round(random_result.cv_results_['std_test_recall'][random_result.best_index_], 4))
   print(f'The best hyperparameters are {random_result.best_params_}')
+
+#   {'bootstrap': True,
+#  'ccp_alpha': 0.0,
+#  'class_weight': None,
+#  'criterion': 'gini',
+#  'max_depth': None,
+#  'max_features': 0.2864742729236049,
+#  'max_leaf_nodes': None,
+#  'max_samples': None,
+#  'min_impurity_decrease': 0.0,
+#  'min_samples_leaf': 1,
+#  'min_samples_split': 0.15334457419498948,
+#  'min_weight_fraction_leaf': 0.0,
+#  'n_estimators': 141,
+#  'n_jobs': None,
+#  'oob_score': False,
+#  'random_state': None,
+#  'verbose': 0,
+#  'warm_start': False}
 
 def gridSearch(model):
   param_grid = {
@@ -106,7 +178,7 @@ def ROC(model, name):
   import matplotlib.pyplot as plt
   from sklearn.metrics import roc_auc_score, roc_curve
 
-  probs_xg = model.predict_proba(X_test_scaled)[:, 1] # calculate predictive probability
+  probs_xg = model.predict_proba(X_test)[:, 1] # calculate predictive probability
   y_test_int = y_test.replace({'Good': 1, 'Bad': 0})
   auc_xg = roc_auc_score(y_test_int, probs_xg)
   fpr_xg, tpr_xg, thresholds_xg = roc_curve(y_test_int, probs_xg)
@@ -119,7 +191,7 @@ def ROC(model, name):
   plt.legend()
   plt.show()
 
-def randomForest():
+def randomForest(predictX, predictY, note):
   # random forest classifier - key paramaters are max features and n estimators
   # max features is number of subsets of features to consider when splitting a node
   # # estimators are the number of trees in the forest - more trees is better
@@ -127,20 +199,40 @@ def randomForest():
   from sklearn.metrics import classification_report
   from sklearn.metrics import accuracy_score
   from sklearn.metrics import confusion_matrix
+  
 
-  RFclf = RandomForestClassifier(max_depth=6, max_leaf_nodes=9, n_estimators=150, max_features=None)
-  RFclf.fit(X_train_scaled, y_train)
-  y_pred = RFclf.predict(X_test_scaled)
-  # print(y_pred[0:10])
+  RFclf = RandomForestClassifier(bootstrap=True,
+ ccp_alpha=0.0,
+ class_weight=None,
+ criterion='gini',
+ max_depth=None,
+ max_features=0.2864742729236049,
+ max_leaf_nodes=None,
+ max_samples=None,
+ min_impurity_decrease=0.0,
+ min_samples_leaf=1,
+ min_samples_split=0.15334457419498948,
+ min_weight_fraction_leaf=0.0,
+ n_estimators=141,
+ n_jobs=None,
+ oob_score=False,
+ random_state=None,
+ verbose=0,
+ warm_start=False)
+  RFclf.fit(X_train_scaled.values, y_train)
 
-  result = confusion_matrix(y_test, y_pred)
+  y_pred = RFclf.predict(predictX)
+
+  result = confusion_matrix(predictY, y_pred)
   print("Confusion Matrix:")
   print(result)
-  result1 = classification_report(y_test, y_pred)
+  result1 = classification_report(predictY, y_pred)
   print("Classification Report:",)
   print (result1)
-  result2 = accuracy_score(y_test,y_pred)
+  result2 = accuracy_score(predictY, y_pred)
   print("Accuracy:",result2)
+  
+  ROC(RFclf, f'Random Forest {note}')
 
 
 def featureImp(model):
@@ -181,8 +273,8 @@ def basics():
   # and print the results. 
   model_preds = {
       "Logistic Regression": log_reg_preds,
-      "Support Vector Machine": svm_preds,
-      "Decision Tree": tree_preds
+      # "Support Vector Machine": svm_preds,
+      # "Decision Tree": tree_preds
   }
 
   for model, preds in model_preds.items():
@@ -192,9 +284,7 @@ def basics():
       print(f"{model} Results:\n{classification_report(y_test, preds)}", sep="\n\n")
       
   
-  ROC(logistic_regression, "LOG")
-  ROC(svm, "SVM")
-  ROC(tree, "TRE")
+
 
 
 
@@ -252,7 +342,6 @@ df = pd.get_dummies(data=df_updated, columns=['p_vdinsufa', 'p_vdinsufm', 'p_vdi
                                  'p_diabetes', 'p_numdisv', 'p_prevmi', 'p_presentation', 'p_race', 
                                  'p_status', 'p_chf', 'p_smoker', 'p_numcvsurg', 'p_pci', 'p_payor'])
 
-
 # data imputation
 from sklearn.impute import SimpleImputer
 categorical = [
@@ -291,33 +380,60 @@ for col in numeric:
 
 # 243,173 patients after filtering outliers
 
+
 # Instantiate scaler and fit on features
 from sklearn.preprocessing import StandardScaler
-
+# deleted preop shock/salvage - only 1% of patients had it
 # Split data into features and label 
 df['target'] = df['o_mortality']
 p_cols = []
 for col in df.columns:
     if col[0] == 'p':
         p_cols.append(col) 
-X = df[['p_preop_shock_1.0', 'p_bsa', 'p_status_Salvage', 'p_age', 'p_platelets', 'p_gender_Female', 'p_creatlst', 'p_status_Elective', 'p_bmi']].copy()
+X = df[['p_bsa', 'p_age', 'p_platelets', 'p_gender_Female', 'p_creatlst', 'p_status_Elective', 'p_bmi']].copy()
 # X = df[p_cols].copy()
 y = df["target"].copy() 
 
-scaler = StandardScaler()
-scaler.fit(X)
-#
-# Transform features
-X_scaled = scaler.transform(X.values)
+
+
 
 from sklearn.model_selection import train_test_split
 
 # Split data into train and test
-X_train_scaled, X_tmp, y_train, y_tmp = train_test_split(X,
+x_train, X_tmp, y_train, y_tmp = train_test_split(X,
                                                                   y,
                                                              train_size=.8,
                                                            random_state=25) # different splits every time code runs
 # add validation set
-X_val, X_test_scaled, y_val, y_test = train_test_split(X_tmp, y_tmp, train_size=0.5, random_state=25)
+X_val, X_test, y_val, y_test = train_test_split(X_tmp, y_tmp, train_size=0.5, random_state=25)
 
-basics()
+
+# normalize data, using same parameters as train on test set
+scaler = StandardScaler()
+x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']] = scaler.fit_transform(x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']])
+X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']] = scaler.fit_transform(X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']])
+
+
+
+# resample training set
+train_df = pd.concat([x_train, y_train], axis=1)
+
+survived = train_df.loc[train_df['target'] == 0]
+dead = train_df.loc[train_df['target'] == 1]
+
+#upsample the minority class
+dead_upsampled = resample(dead,random_state=42,n_samples=3000,replace=True)
+survived_downsampled = resample(survived,random_state=42,n_samples=3000,replace=True)
+
+# Combine minority class with upsampled minority class
+df_mort = pd.concat([dead_upsampled, survived_downsampled])
+
+y_train_scaled = df_mort['target']
+x_train_scaled = df_mort.drop(['target'], axis=1)
+
+XGB()
+
+
+
+
+
