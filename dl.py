@@ -4,6 +4,12 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 import torch.nn as nn
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import confusion_matrix
+from sklearn.utils import resample
+
+is_gpu = torch.cuda.is_available() # is pytorch using the GPU
 
 class Data(Dataset):
   def __init__(self, X_train, y_train):
@@ -96,26 +102,46 @@ x_train, X_tmp, y_train, y_tmp = train_test_split(X,
 # add validation set
 X_val, X_test, y_val, y_test = train_test_split(X_tmp, y_tmp, train_size=0.5, random_state=25)
 
+# trying resampling
+# resample training set
+train_df = pd.concat([x_train, y_train], axis=1)
+
+survived = train_df.loc[train_df['o_mortality'] == 0]
+dead = train_df.loc[train_df['o_mortality'] == 1]
+
+
+#upsample the minority class
+dead_upsampled = resample(dead,random_state=42,n_samples=20000,replace=True)
+survived_downsampled = resample(survived,random_state=42,n_samples=20000,replace=True)
+
+
+# Combine minority class with upsampled minority class
+df_mort = pd.concat([dead_upsampled, survived_downsampled, train_df])
+
+y_train = df_mort[['o_mortality', 'o_rf', 'o_stroke', 'o_vent', 'o_dswi', 'o_reop', 'o_majorcomposite', 'o_pplos', 'o_splos']]
+x_train = df_mort.drop(['o_mortality', 'o_rf', 'o_stroke', 'o_vent', 'o_dswi', 'o_reop', 'o_majorcomposite', 'o_pplos', 'o_splos'], axis=1)
+
+
 # scale numeric variables
 scaler = StandardScaler()
-x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']] = scaler.fit_transform(x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']])
-X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']] = scaler.fit_transform(X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi']])
+x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi', 'p_hdef', 'p_hct', 'p_wbc', 'p_medadp5days', 'p_year']] = scaler.fit_transform(x_train[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi', 'p_hdef', 'p_hct', 'p_wbc', 'p_medadp5days', 'p_year']])
+X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi', 'p_hdef', 'p_hct', 'p_wbc', 'p_medadp5days', 'p_year']] = scaler.fit_transform(X_test[['p_bsa', 'p_age', 'p_platelets', 'p_creatlst', 'p_status_Elective', 'p_bmi', 'p_hdef', 'p_hct', 'p_wbc', 'p_medadp5days', 'p_year']])
 
+torch.manual_seed(25)
 
 traindata = Data(x_train.to_numpy(), y_train.to_numpy())
 testdata = Data(X_test.to_numpy(), y_test.to_numpy())
 
 batch_size = 200
-n_iters = 9000
+n_iters = 23875
 num_epochs = int(n_iters / (len(traindata) / batch_size))
 trainloader = DataLoader(traindata, batch_size=batch_size, 
                          shuffle=True)
-test_loader = torch.utils.data.DataLoader(dataset=testdata, 
+testloader = torch.utils.data.DataLoader(dataset=testdata, 
                                           batch_size=batch_size, 
                                           shuffle=False)
-print(trainloader)
-def NeuralNetwork():
-    class MultiOutputClassifier(nn.Module):
+
+class MultiOutputClassifier(nn.Module):
         def __init__(self, input_size, hidden_size, num_classes):
             super(MultiOutputClassifier, self).__init__()
             
@@ -123,35 +149,46 @@ def NeuralNetwork():
             self.fc1 = nn.Linear(input_size, hidden_size)
             self.relu = nn.ReLU()
             self.fc2 = nn.Linear(hidden_size, num_classes)
+            self.sigmoid = nn.Sigmoid()
 
         def forward(self, x):
             # Forward pass through the network
             out = self.fc1(x)
-            out = self.relu(out)
+            out = self.sigmoid(out)
             out = self.fc2(out)
+            out = self.sigmoid(out)
             return out
 
+input_size = 130
+hidden_size = 100
+num_classes = 9
+
+criterion = nn.BCELoss()
+
+def NeuralNetwork():
     # instantiate the multioutput classifier
-    input_size = 130
-    hidden_size = 100
-    num_classes = 9
     model = MultiOutputClassifier(input_size, hidden_size, num_classes)
 
     # instantiate the loss class
-    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1) 
 
-    # Assuming you have a DataLoader with your dataset
     for epoch in range(num_epochs):
+        train_loss = 0.0
+        # use this to track labels
+        all_predictions = []
+        all_ground_truth = []
         for inputs, targets in trainloader:
             # Zero the gradients
             optimizer.zero_grad()
             
             # Forward pass
             outputs = model(inputs)
+            all_predictions.append(outputs)
+            all_ground_truth.append(targets)
+            
             
             # Calculate the loss
-            loss = criterion(outputs, targets)
+            loss = criterion(outputs, targets.float())
             
             # Backward pass
             loss.backward()
@@ -159,6 +196,54 @@ def NeuralNetwork():
             # Update the weights
             optimizer.step()
 
+            train_loss += loss.item() * inputs.size(0)
+
+        print(f'Epoch: {epoch+1} / {num_epochs} \t\t\t Training Loss:{train_loss/len(trainloader)}')
+
+        all_predictions = torch.cat(all_predictions, dim=0)
+        all_ground_truth = torch.cat(all_ground_truth, dim=0)
+        labels = (all_predictions > 0.5).float()
+        auc_score = roc_auc_score(all_ground_truth[:,[0]], labels[:,[0]])
+        print('mortality score: ' + str(auc_score))
+        print(confusion_matrix(all_ground_truth[:,[0]], labels[:,[0]]))
+
     PATH = '/Users/natashabanga/Documents/eda_code/acsd/testFNN.pth'
     torch.save(model.state_dict(), PATH)
 
+
+
+def inference():
+    # reload saved model and run inference
+    model = MultiOutputClassifier(input_size, hidden_size, num_classes)
+    model.load_state_dict(torch.load('/Users/natashabanga/Documents/eda_code/acsd/testFNN.pth'))
+    model.eval() # need this line to set dropout and batch normalization layer
+
+    all_predictions = []
+    all_ground_truth = []
+
+    # Iterate through the DataLoader
+    with torch.no_grad():
+        for inputs, targets in testloader:
+            # Forward pass
+            outputs = model(inputs)
+
+            # Store predictions and ground truth labels
+            all_predictions.append(outputs)
+            all_ground_truth.append(targets)
+
+    # Concatenate predictions and ground truth labels along the batch dimension
+    all_predictions = torch.cat(all_predictions, dim=0)
+    all_ground_truth = torch.cat(all_ground_truth, dim=0)
+
+    # get labels and calculate ROC AUC scores
+    def label_wise_accuracy(output, target):
+        pred = (output > 0.5).float()
+        correct = (pred == target).float()
+        label_accuracy = torch.mean(correct, dim=0)
+        return label_accuracy
+    
+    labels = (all_predictions > 0.5).float()
+    auc_score = roc_auc_score(all_ground_truth[:,[4]], labels[:,[4]])
+    print('smth score: ' + str(auc_score))
+
+NeuralNetwork()
